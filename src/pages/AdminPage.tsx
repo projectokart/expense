@@ -48,7 +48,7 @@ export default function AdminPage() {
   const [isActionLoading, setIsActionLoading] = useState<string | null>(null);
 
   const [searchFilters, setSearchFilters] = useState({
-    searchQuery: "", userEmail: "all", missionName: "all",
+    searchQuery: "", userEmails: [] as string[], missionName: "all",
     category: "all", startDate: "", endDate: "", status: "all",
   });
 
@@ -88,17 +88,17 @@ export default function AdminPage() {
   [expenses]);
 
   const uniqueMissions = useMemo(() => {
-    const list = searchFilters.userEmail !== "all"
-      ? expenses.filter((e: any) => e.profiles?.name === searchFilters.userEmail)
+    const list = searchFilters.userEmails.length > 0
+      ? expenses.filter((e: any) => searchFilters.userEmails.includes(e.profiles?.name))
       : expenses;
     return Array.from(new Set(list.map((e: any) => e.missions?.name).filter(Boolean))) as string[];
-  }, [expenses, searchFilters.userEmail]);
+  }, [expenses, searchFilters.userEmails]);
 
   const filteredExpenses = useMemo(() => {
     const q = searchFilters.searchQuery.toLowerCase();
     return expenses.filter((e: any) => {
       const matchSearch  = !q || (e.profiles?.name||"").toLowerCase().includes(q) || (e.description||"").toLowerCase().includes(q) || (e.category||"").toLowerCase().includes(q);
-      const matchUser    = searchFilters.userEmail   === "all" || e.profiles?.name === searchFilters.userEmail;
+      const matchUser    = searchFilters.userEmails.length === 0 || searchFilters.userEmails.includes(e.profiles?.name);
       const matchMission = searchFilters.missionName === "all" || e.missions?.name === searchFilters.missionName;
       const matchCat     = searchFilters.category    === "all" || e.category       === searchFilters.category;
       const matchStatus  = searchFilters.status      === "all" || e.status         === searchFilters.status;
