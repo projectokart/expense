@@ -291,8 +291,8 @@ const uploadImage = async (cardId: string, subId: string) => {
   }
 
   if (exceededCategories.length > 0) {
-    toast.warning(`Limit exceeded for: ${exceededCategories.join(", ")}. Admin may adjust the amount.`);
-    // Don't block - allow submission with warning
+    toast.error(`Daily limit exceeded for: ${exceededCategories.join(", ")}. Please reduce the amount.`);
+    return; // Block submission when limit exceeded
   }
 
   // 5. Database Insert
@@ -312,9 +312,9 @@ const uploadImage = async (cardId: string, subId: string) => {
 };
 
   return (
-    <div className="mt-6 glass-card rounded-4xl p-5 animate-fade-in shadow-2xl border border-white/20">
+    <div className="glass-card rounded-3xl p-4 animate-fade-in shadow-xl border border-white/20">
       <div className="flex justify-between items-start mb-5">
-        <h3 className="text-lg font-black text-foreground italic tracking-tight">Daily Entry</h3>
+        <h3 className="text-sm font-black text-foreground italic tracking-tight">Daily Entry</h3>
         <div className="text-right">
           <span className={`text-[10px] font-black px-3 py-1.5 rounded-xl shadow-inner ${liveTotal < 0 ? "bg-success/10 text-success" : "bg-primary/10 text-primary"}`}>
             ₹ {liveTotal.toLocaleString()}
@@ -528,7 +528,7 @@ const uploadImage = async (cardId: string, subId: string) => {
       })
         ? "bg-slate-300 text-slate-500 cursor-not-allowed shadow-none" 
         : cards.some(c => c.category && getCategoryLimitStatus(c.category)?.exceeded)
-          ? "bg-warning text-warning-foreground shadow-warning/20 active:scale-[0.98] hover:opacity-90"
+          ? "bg-slate-400 text-white cursor-not-allowed shadow-none"
           : "bg-primary text-primary-foreground shadow-primary/20 active:scale-[0.98] hover:opacity-90"
     } 
     disabled:opacity-50 disabled:pointer-events-none`}
