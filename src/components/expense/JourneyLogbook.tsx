@@ -3,7 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { 
   Camera, Eye, Save, X, Loader2, MessageSquareText,
-  ChevronDown, Lock as LockKeyhole, ChevronRight, MapPin, Users as UsersIcon, FileText, Trash2
+  ChevronDown, Lock as LockKeyhole, ChevronRight, MapPin, Users as UsersIcon, FileText, Trash2,
+  BadgeCheck, CircleDollarSign, FileBarChart2
 } from "lucide-react";
 import ImagePreviewModal from "./ImagePreviewModal";
 import MissionGallery from "./MissionGallery";
@@ -61,9 +62,11 @@ interface EditValues {
 interface Props {
   userId: string;
   refreshKey: number;
+  settlements?: any[];
+  userName?: string;
 }
 
-export default function JourneyLogbook({ userId, refreshKey }: Props) {
+export default function JourneyLogbook({ userId, refreshKey, settlements = [], userName = "User" }: Props) {
 
   const [expandedEntry, setExpandedEntry] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<{ [key: string]: File | null }>({});
@@ -116,6 +119,15 @@ export default function JourneyLogbook({ userId, refreshKey }: Props) {
       grouped[e.date].push(e);
     });
     return Object.entries(grouped).sort(([a], [b]) => b.localeCompare(a));
+  };
+
+  const getMissionSettlementStatus = (missionId: string) => {
+    const mExp = expenses.filter(e => e.mission_id === missionId && e.status === "approved" && e.category !== "cash");
+    const mSet = settlements.filter((s: any) => s.mission_id === missionId);
+    const spent = mExp.reduce((s, e) => s + Number(e.amount), 0);
+    const received = mSet.reduce((s: number, c: any) => s + Number(c.amount), 0);
+    const pending = spent - received;
+    return { spent, received, pending, isSettled: spent > 0 && pending <= 0, hasExpenses: spent > 0 };
   };
 
   const toggleMission = (missionId: string) => {
@@ -488,12 +500,261 @@ export default function JourneyLogbook({ userId, refreshKey }: Props) {
     );
   };
 
+
+  // ── MISSION REPORT GENERATOR ──
+  const generateMissionReport = (mission: Mission) => {
+    const mExp = getExpensesForMission(mission.id);
+    const mSet = settlements.filter((s: any) => s.mission_id === mission.id);
+
+    const approvedList = mExp.filter(e => e.status === "approved" && e.category !== "cash");
+    const rejectedList = mExp.filter(e => e.status === "rejected");
+    const pendingList  = mExp.filter(e => e.status === "pending");
+
+    const totalApproved  = approvedList.reduce((s, e) => s + Number(e.amount), 0);
+    const totalRejected  = rejectedList.reduce((s, e) => s + Number(e.amount), 0);
+    const totalPending   = pendingList.reduce((s, e) => s + Number(e.amount), 0);
+    const totalReceived  = mSet.reduce((s: number, c: any) => s + Number(c.amount), 0);
+    const netPending     = totalApproved - totalReceived;
+
+    const fmt = (n: number) => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+    const today = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "long", year: "numeric" });
+    const catColors: Record<string, string> = {
+      travel: "#3B82F6", meal: "#F97316", hotel: "#8B5CF6",
+      luggage: "#06B6D4", cash: "#6B7280", other: "#64748B",
+    };
+
+    const buildRows = (list: Expense[]) => list.map(e => {
+      const col = catColors[e.category] || "#6b7280";
+      const amtStyle = e.status === "rejected"
+        ? "color:#ef4444;text-decoration:line-through;"
+        : e.status === "pending" ? "color:#d97706;" : "color:#059669;font-weight:700;";
+      const badge = e.status === "approved"
+        ? `<span style="background:#d1fae5;color:#065f46;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:800;">APPROVED</span>`
+        : e.status === "rejected"
+          ? `<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:800;">REJECTED</span>`
+          : `<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:20px;font-size:9px;font-weight:800;">PENDING</span>`;
+      const imgHtml = e.image_url
+        ? `<img src="${e.image_url}" style="width:60px;height:60px;object-fit:cover;border-radius:8px;border:1.5px solid #e5e7eb;"/>`
+        : `<div style="width:40px;height:40px;border-radius:8px;border:2px dashed #d1d5db;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:8px;font-weight:700;">NO IMG</div>`;
+      return `<tr style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:7px 8px;font-size:10px;color:#6b7280;white-space:nowrap;">${e.date}</td>
+        <td style="padding:7px 8px;"><span style="background:${col}18;color:${col};padding:2px 7px;border-radius:20px;font-size:9px;font-weight:800;text-transform:uppercase;">${e.category}</span></td>
+        <td style="padding:7px 8px;font-size:10px;max-width:160px;word-break:break-word;">${e.description || "-"}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:11px;white-space:nowrap;${amtStyle}">${fmt(Number(e.amount))}</td>
+        <td style="padding:7px 8px;text-align:center;">${badge}</td>
+        <td style="padding:6px 8px;text-align:center;vertical-align:middle;">${imgHtml}</td>
+      </tr>`;
+    }).join("");
+
+    const tableHead = `<thead><tr style="border-bottom:2px solid #f1f5f9;">
+      <th style="padding:6px 8px;text-align:left;font-size:7px;font-weight:800;text-transform:uppercase;color:#94a3b8;">Date</th>
+      <th style="padding:6px 8px;text-align:left;font-size:7px;font-weight:800;text-transform:uppercase;color:#94a3b8;">Category</th>
+      <th style="padding:6px 8px;text-align:left;font-size:7px;font-weight:800;text-transform:uppercase;color:#94a3b8;">Description</th>
+      <th style="padding:6px 8px;text-align:right;font-size:7px;font-weight:800;text-transform:uppercase;color:#94a3b8;">Amount</th>
+      <th style="padding:6px 8px;text-align:center;font-size:7px;font-weight:800;text-transform:uppercase;color:#94a3b8;">Status</th>
+      <th style="padding:6px 8px;text-align:center;font-size:7px;font-weight:800;text-transform:uppercase;color:#94a3b8;">Receipt</th>
+    </tr></thead>`;
+
+    const approvedSec = approvedList.length > 0 ? `
+      <div style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 0 6px;">
+          <div style="width:7px;height:7px;border-radius:50%;background:#10b981;flex-shrink:0;"></div>
+          <span style="font-size:9px;font-weight:800;text-transform:uppercase;color:#059669;letter-spacing:0.08em;">Approved Expenses</span>
+          <span style="font-size:8px;color:#94a3b8;margin-left:auto;">${approvedList.length} records &nbsp;·&nbsp; ${fmt(totalApproved)}</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;">
+          ${tableHead}<tbody>
+          ${buildRows(approvedList)}
+          <tr style="border-top:2px solid #e2e8f0;">
+            <td colspan="3" style="padding:8px;text-align:right;font-size:8px;font-weight:800;color:#6b7280;text-transform:uppercase;">Approved Total</td>
+            <td style="padding:8px;text-align:right;font-size:12px;font-weight:900;color:#059669;">${fmt(totalApproved)}</td>
+            <td colspan="2"></td>
+          </tr>
+          </tbody>
+        </table>
+      </div>` : "";
+
+    const rejectedSec = rejectedList.length > 0 ? `
+      <div style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 0 6px;">
+          <div style="width:7px;height:7px;border-radius:50%;background:#ef4444;flex-shrink:0;"></div>
+          <span style="font-size:9px;font-weight:800;text-transform:uppercase;color:#dc2626;letter-spacing:0.08em;">Rejected Expenses</span>
+          <span style="font-size:8px;color:#94a3b8;margin-left:auto;">${rejectedList.length} records &nbsp;·&nbsp; ${fmt(totalRejected)}</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;">
+          ${tableHead}<tbody>${buildRows(rejectedList)}</tbody>
+        </table>
+      </div>` : "";
+
+    const pendingSec = pendingList.length > 0 ? `
+      <div style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 0 6px;">
+          <div style="width:7px;height:7px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></div>
+          <span style="font-size:9px;font-weight:800;text-transform:uppercase;color:#d97706;letter-spacing:0.08em;">Pending Expenses</span>
+          <span style="font-size:8px;color:#94a3b8;margin-left:auto;">${pendingList.length} records &nbsp;·&nbsp; ${fmt(totalPending)}</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;">
+          ${tableHead}<tbody>${buildRows(pendingList)}</tbody>
+        </table>
+      </div>` : "";
+
+    const buildSettlementRows = (list: any[]) => list.map((s: any) => {
+      const imgHtml = s.proof_url
+        ? `<img src="${s.proof_url}" style="width:60px;height:60px;object-fit:cover;border-radius:8px;border:1.5px solid #e5e7eb;"/>`
+        : `<div style="width:40px;height:40px;border-radius:8px;border:2px dashed #d1d5db;display:flex;align-items:center;justify-content:center;color:#9ca3af;font-size:8px;">NO IMG</div>`;
+      return `<tr style="border-bottom:1px solid #f3f4f6;">
+        <td style="padding:7px 8px;font-size:10px;color:#6b7280;">${s.created_at?.split("T")[0] || "-"}</td>
+        <td style="padding:7px 8px;font-size:10px;">${s.note || s.mission?.name || "-"}</td>
+        <td style="padding:7px 8px;text-align:right;font-size:11px;font-weight:800;color:#059669;">${fmt(Number(s.amount))}</td>
+        <td style="padding:6px 8px;text-align:center;vertical-align:middle;">${imgHtml}</td>
+      </tr>`;
+    }).join("");
+
+    const settlementSec = mSet.length > 0 ? `
+      <div style="margin-bottom:4px;">
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 0 6px;">
+          <div style="width:7px;height:7px;border-radius:50%;background:#2563eb;flex-shrink:0;"></div>
+          <span style="font-size:9px;font-weight:800;text-transform:uppercase;color:#2563eb;letter-spacing:0.08em;">Amount Received</span>
+          <span style="font-size:8px;color:#94a3b8;margin-left:auto;">${mSet.length} payment${mSet.length > 1 ? "s" : ""} &nbsp;·&nbsp; ${fmt(totalReceived)}</span>
+        </div>
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr style="border-bottom:2px solid #f1f5f9;">
+            <th style="padding:6px 8px;text-align:left;font-size:7px;font-weight:800;text-transform:uppercase;color:#94a3b8;">Date</th>
+            <th style="padding:6px 8px;text-align:left;font-size:7px;font-weight:800;text-transform:uppercase;color:#94a3b8;">Note</th>
+            <th style="padding:6px 8px;text-align:right;font-size:7px;font-weight:800;text-transform:uppercase;color:#94a3b8;">Amount</th>
+            <th style="padding:6px 8px;text-align:center;font-size:7px;font-weight:800;text-transform:uppercase;color:#94a3b8;">Proof</th>
+          </tr></thead>
+          <tbody>
+            ${buildSettlementRows(mSet)}
+            <tr style="border-top:2px solid #e2e8f0;">
+              <td colspan="2" style="padding:8px;text-align:right;font-size:8px;font-weight:800;color:#6b7280;text-transform:uppercase;">Total Received</td>
+              <td style="padding:8px;text-align:right;font-size:12px;font-weight:900;color:#2563eb;">${fmt(totalReceived)}</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>` : "";
+
+    const pendingColor = netPending > 0 ? "#dc2626" : "#059669";
+    const startDate = new Date(mission.start_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+    const endDate = mission.end_date
+      ? new Date(mission.end_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+      : "Ongoing";
+
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+<title>Mission Report — ${mission.name}</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI',Arial,sans-serif; background:#f1f5f9; }
+.page { max-width:960px; margin:0 auto; background:#fff; }
+@media print {
+  @page { size:A4 portrait; margin:8mm; }
+  body { -webkit-print-color-adjust:exact; print-color-adjust:exact; background:#fff; }
+  .no-print { display:none !important; }
+  .page { max-width:100%; }
+}
+</style></head><body>
+<div class="page">
+  <!-- Header -->
+  <div style="background:linear-gradient(135deg,#1e3a5f,#0f2444);color:#fff;padding:28px 36px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div>
+        <div style="font-size:22px;font-weight:900;letter-spacing:-0.5px;">Expense<span style="color:#34d399;">.</span>Report</div>
+        <div style="font-size:14px;font-weight:800;color:#e2e8f0;margin-top:8px;text-transform:uppercase;letter-spacing:0.05em;">${mission.name}</div>
+        <div style="font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.8;">
+          <div>Employee: <span style="color:#e2e8f0;font-weight:700;">${userName}</span></div>
+          <div>Period: <span style="color:#e2e8f0;">${startDate} → ${endDate}</span></div>
+          <div>Generated: ${today}</div>
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:8px;color:#94a3b8;font-weight:700;text-transform:uppercase;margin-bottom:4px;">Net Pending</div>
+        <div style="font-size:28px;font-weight:900;color:${pendingColor};">${fmt(Math.abs(netPending))}</div>
+        <div style="font-size:8px;color:#94a3b8;margin-top:2px;">${netPending > 0 ? "amount to be paid" : "advance / settled"}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary pills -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:20px 36px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+    <div style="background:#fff;border-radius:12px;padding:14px;border:1px solid #e2e8f0;">
+      <div style="font-size:7px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:4px;">Total Approved</div>
+      <div style="font-size:18px;font-weight:900;color:#059669;">${fmt(totalApproved)}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:14px;border:1px solid #e2e8f0;">
+      <div style="font-size:7px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:4px;">Total Received</div>
+      <div style="font-size:18px;font-weight:900;color:#2563eb;">${fmt(totalReceived)}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:14px;border:1px solid #e2e8f0;">
+      <div style="font-size:7px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:4px;">Net Pending</div>
+      <div style="font-size:18px;font-weight:900;color:${pendingColor};">${fmt(Math.abs(netPending))}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:14px;border:1px solid #e2e8f0;">
+      <div style="font-size:7px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#94a3b8;margin-bottom:4px;">Total Rejected</div>
+      <div style="font-size:18px;font-weight:900;color:#dc2626;">${fmt(totalRejected)}</div>
+    </div>
+  </div>
+
+  <!-- Pending row (extra context) -->
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:12px 36px 20px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+    <div style="background:#fff;border-radius:12px;padding:12px;border:1px solid #fef3c7;">
+      <div style="font-size:7px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#d97706;margin-bottom:4px;">Pending (Awaiting Review)</div>
+      <div style="font-size:16px;font-weight:900;color:#d97706;">${fmt(totalPending)}</div>
+      <div style="font-size:8px;color:#94a3b8;margin-top:2px;">${pendingList.length} entries</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:12px;border:1px solid #d1fae5;">
+      <div style="font-size:7px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#059669;margin-bottom:4px;">Approved Entries</div>
+      <div style="font-size:16px;font-weight:900;color:#059669;">${approvedList.length}</div>
+      <div style="font-size:8px;color:#94a3b8;margin-top:2px;">${fmt(totalApproved)}</div>
+    </div>
+    <div style="background:#fff;border-radius:12px;padding:12px;border:1px solid #fee2e2;">
+      <div style="font-size:7px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;color:#dc2626;margin-bottom:4px;">Rejected Entries</div>
+      <div style="font-size:16px;font-weight:900;color:#dc2626;">${rejectedList.length}</div>
+      <div style="font-size:8px;color:#94a3b8;margin-top:2px;">${fmt(totalRejected)}</div>
+    </div>
+  </div>
+
+  <!-- Expense sections -->
+  <div style="padding:24px 36px;">
+    ${approvedSec}
+    ${pendingSec}
+    ${rejectedSec}
+    ${settlementSec}
+  </div>
+
+  <!-- Footer -->
+  <div style="background:#f8fafc;border-top:2px solid #e2e8f0;padding:16px 36px;display:flex;justify-content:space-between;align-items:center;">
+    <div style="font-size:9px;color:#6b7280;">
+      <div style="font-weight:800;color:#374151;font-size:11px;margin-bottom:3px;">${mission.name} — Final Summary</div>
+      <div>Approved: ${fmt(totalApproved)} &nbsp;|&nbsp; Received: ${fmt(totalReceived)} &nbsp;|&nbsp; Rejected: ${fmt(totalRejected)} &nbsp;|&nbsp; Pending review: ${fmt(totalPending)}</div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-size:8px;color:#94a3b8;margin-bottom:2px;font-weight:700;text-transform:uppercase;">Net Payable</div>
+      <div style="font-size:18px;font-weight:900;color:${pendingColor};">${fmt(Math.max(0, netPending))}</div>
+    </div>
+  </div>
+</div>
+
+<div class="no-print" style="position:fixed;bottom:24px;right:24px;display:flex;gap:10px;z-index:999;">
+  <button onclick="window.print()" style="background:linear-gradient(135deg,#1e3a5f,#0f2444);color:#fff;border:none;padding:12px 28px;border-radius:12px;font-size:12px;font-weight:800;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.2);">🖨️ PRINT</button>
+  <button onclick="window.close()" style="background:#fff;color:#6b7280;border:1px solid #e2e8f0;padding:12px 20px;border-radius:12px;font-size:12px;cursor:pointer;">CLOSE</button>
+</div>
+<script>window.onload = () => setTimeout(() => window.print(), 600);</script>
+</body></html>`;
+
+    const w = window.open("", "_blank", "width=980,height=860");
+    if (!w) { toast.error("Popup blocked! Allow popups and try again."); return; }
+    w.document.write(html);
+    w.document.close();
+  };
+
   const renderActiveMission = (mission: Mission) => {
     const missionExpenses = getExpensesForMission(mission.id);
     const dateGroups = groupByDate(missionExpenses);
     const missionTotal = missionExpenses.filter(e => e.category !== "cash").reduce((s, e) => s + Number(e.amount), 0);
     const cashTotal = missionExpenses.filter(e => e.category === "cash").reduce((s, e) => s + Number(e.amount), 0);
     const isMissionOpen = expandedMissions.has(mission.id);
+    const sd = getMissionSettlementStatus(mission.id);
 
     return (
       <div key={mission.id} className="bg-card rounded-2xl border border-border overflow-hidden animate-fade-in mb-3">
@@ -520,9 +781,20 @@ export default function JourneyLogbook({ userId, refreshKey }: Props) {
               <p className="text-[8px] text-muted-foreground font-bold mt-0.5 ml-3.5">
                 {new Date(mission.start_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" })} → Ongoing
               </p>
-              <div className="flex gap-1.5 mt-1.5 ml-3.5">
+              <div className="flex gap-1.5 mt-1.5 ml-3.5 flex-wrap">
                 <span className="text-[7px] bg-secondary px-2 py-0.5 rounded-full font-black text-muted-foreground">{missionExpenses.length} entries</span>
                 <span className="text-[7px] px-2 py-0.5 rounded-full font-black uppercase bg-success/15 text-success">Active</span>
+                {sd.hasExpenses && (
+                  sd.isSettled ? (
+                    <span className="flex items-center gap-0.5 text-[7px] font-black px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100">
+                      <BadgeCheck className="w-2.5 h-2.5" /> Settled
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-0.5 text-[7px] font-black px-2 py-0.5 rounded-full bg-rose-50 text-rose-500 border border-rose-100">
+                      <CircleDollarSign className="w-2.5 h-2.5" /> ₹{sd.pending.toLocaleString()} Due
+                    </span>
+                  )
+                )}
               </div>
             </div>
             <div className="flex items-start gap-2 flex-shrink-0 ml-2">
@@ -547,6 +819,17 @@ export default function JourneyLogbook({ userId, refreshKey }: Props) {
             )}
             <div className="px-4 pt-2">
               <MissionGallery missionId={mission.id} userId={userId} isActive={true} />
+            </div>
+            {/* Create Report Button */}
+            <div className="px-4 pt-2 pb-1">
+              <button
+                onClick={() => generateMissionReport(mission)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl text-[9px] font-black uppercase tracking-wider transition-all active:scale-95 text-white shadow-sm"
+                style={{background: "linear-gradient(135deg,#1e3a5f,#0f2444)"}}
+              >
+                <FileBarChart2 className="w-3.5 h-3.5" />
+                Create Report
+              </button>
             </div>
             <div className="divide-y divide-border">
               {dateGroups.length === 0 && (
@@ -589,6 +872,7 @@ export default function JourneyLogbook({ userId, refreshKey }: Props) {
     const missionTotal = missionExpenses.filter(e => e.category !== "cash").reduce((s, e) => s + Number(e.amount), 0);
     const cashTotal = missionExpenses.filter(e => e.category === "cash").reduce((s, e) => s + Number(e.amount), 0);
     const isMissionOpen = expandedMissions.has(mission.id);
+    const sd = getMissionSettlementStatus(mission.id);
 
     return (
       <div key={mission.id} className="bg-card rounded-2xl border border-border overflow-hidden animate-fade-in mb-3">
@@ -620,6 +904,19 @@ export default function JourneyLogbook({ userId, refreshKey }: Props) {
               <p className="text-xs font-black text-destructive">₹{missionTotal.toLocaleString()}</p>
               {cashTotal > 0 && <p className="text-[9px] font-bold text-success">+₹{cashTotal.toLocaleString()}</p>}
               <span className="text-[8px] bg-secondary px-2 py-0.5 rounded-full font-black text-muted-foreground">{missionExpenses.length} entries</span>
+              {sd.hasExpenses && (
+                <div className="mt-1.5 flex justify-end">
+                  {sd.isSettled ? (
+                    <span className="flex items-center gap-0.5 text-[7px] font-black px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100">
+                      <BadgeCheck className="w-2.5 h-2.5" /> Settled
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-0.5 text-[7px] font-black px-2 py-0.5 rounded-full bg-rose-50 text-rose-500 border border-rose-100">
+                      <CircleDollarSign className="w-2.5 h-2.5" /> ₹{sd.pending.toLocaleString()} Due
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </button>
@@ -636,6 +933,17 @@ export default function JourneyLogbook({ userId, refreshKey }: Props) {
             )}
             <div className="px-4 pb-2">
               <MissionGallery missionId={mission.id} userId={userId} isActive={false} />
+            </div>
+            {/* Create Report Button */}
+            <div className="px-4 pb-2">
+              <button
+                onClick={() => generateMissionReport(mission)}
+                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl text-[9px] font-black uppercase tracking-wider transition-all active:scale-95 text-white shadow-sm"
+                style={{background: "linear-gradient(135deg,#1e3a5f,#0f2444)"}}
+              >
+                <FileBarChart2 className="w-3.5 h-3.5" />
+                Create Report
+              </button>
             </div>
             <div className="divide-y divide-border">
               {dateGroups.length === 0 && (
