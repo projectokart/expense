@@ -402,6 +402,7 @@ export default function UserDashboard() {
                 categoryLimits={categoryLimits}
                 todayExpenses={todayExpenses}
                 onSaved={refresh}
+                isAdmin={role === "admin"}
               />
             )}
           </>
