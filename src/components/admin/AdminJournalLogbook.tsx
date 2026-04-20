@@ -5,7 +5,8 @@ import { toast } from "sonner";
 import {
   ChevronDown, ChevronRight, User, Target, Calendar,
   MapPin, Users as UsersIcon, FileText, Camera, Eye,
-  Pencil, Trash2, Save, X, Loader2, CheckCircle, XCircle, RefreshCw
+  Pencil, Trash2, Save, X, Loader2, CheckCircle, XCircle, RefreshCw,
+  Wallet, BadgeCheck, CircleDollarSign
 } from "lucide-react";
 import ImagePreviewModal from "@/components/expense/ImagePreviewModal";
 import MissionGallery from "@/components/expense/MissionGallery";
@@ -67,6 +68,7 @@ export default function AdminJournalLogbook() {
   const { role } = useAuth();
   const [missions, setMissions] = useState<Mission[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [settlements, setSettlements] = useState<any[]>([]);
   const [profiles, setProfiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -98,16 +100,26 @@ export default function AdminJournalLogbook() {
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const { user } = useAuth();
 
+  // Settlement modal state
+  const [settleModal, setSettleModal] = useState<{
+    open: boolean; missionId: string | null; missionName: string;
+    userId: string; amount: number; amountType: "full" | "partial"; note: string;
+  }>({ open: false, missionId: null, missionName: "", userId: "", amount: 0, amountType: "full", note: "" });
+  const [settlePreviewUrl, setSettlePreviewUrl] = useState("");
+  const [settleTempFile, setSettleTempFile] = useState<File | null>(null);
+  const [settleLoading, setSettleLoading] = useState(false);
+
   useEffect(() => {
     fetchData();
   }, []);
 
   const fetchData = async () => {
     setLoading(true);
-    const [missRes, expRes, profRes] = await Promise.all([
+    const [missRes, expRes, profRes, settRes] = await Promise.all([
       supabase.from("missions").select("*").order("created_at", { ascending: false }),
       supabase.from("expenses").select("*").order("date", { ascending: true }),
       supabase.from("profiles").select("id, name, email"),
+      (supabase.from("settlements" as any) as any).select("*"),
     ]);
 
     const profs = profRes.data || [];
@@ -118,6 +130,7 @@ export default function AdminJournalLogbook() {
 
     setMissions(missionsWithUser);
     setExpenses(expRes.data || []);
+    setSettlements(settRes.data || []);
     setProfiles(profs);
     setLoading(false);
   };
@@ -365,6 +378,73 @@ export default function AdminJournalLogbook() {
     finally { setDeletingExpense(false); setDeleteExpenseId(null); }
   };
 
+  // --- Settlement helpers ---
+  const getMissionSettlementData = (missionId: string) => {
+    const mExp = expenses.filter(e => e.mission_id === missionId && e.status === "approved" && e.category !== "cash");
+    const mSet = settlements.filter((s: any) => s.mission_id === missionId);
+    const spent = mExp.reduce((s, e) => s + Number(e.amount), 0);
+    const received = mSet.reduce((s: number, c: any) => s + Number(c.amount), 0);
+    const pending = spent - received;
+    return { spent, received, pending, isSettled: spent > 0 && pending <= 0, hasExpenses: spent > 0 };
+  };
+
+  const uploadSettleProof = async (file: File): Promise<string | null> => {
+    try {
+      const ext = file.name.split(".").pop();
+      const path = `proofs/${Date.now()}-${Math.random().toString(36).substring(2)}.${ext}`;
+      const { error } = await supabase.storage.from("settlement-proofs").upload(path, file);
+      if (error) throw error;
+      return supabase.storage.from("settlement-proofs").getPublicUrl(path).data.publicUrl;
+    } catch (err: any) { toast.error("Upload failed: " + err.message); return null; }
+  };
+
+  const openSettleModal = (mission: Mission) => {
+    const sd = getMissionSettlementData(mission.id);
+    setSettleModal({
+      open: true,
+      missionId: mission.id,
+      missionName: mission.name,
+      userId: mission.user_id,
+      amount: sd.pending > 0 ? sd.pending : 0,
+      amountType: sd.pending > 0 ? "full" : "partial",
+      note: "",
+    });
+    setSettlePreviewUrl("");
+    setSettleTempFile(null);
+  };
+
+  const handleSettle = async () => {
+    if (!settleTempFile) return toast.error("Upload proof first!");
+    if (!settleModal.amount || settleModal.amount <= 0) return toast.error("Enter valid amount!");
+    setSettleLoading(true);
+    const url = await uploadSettleProof(settleTempFile);
+    if (!url) { setSettleLoading(false); return; }
+    try {
+      const { error } = await (supabase.from("settlements" as any) as any).insert({
+        user_id: settleModal.userId,
+        mission_id: settleModal.missionId,
+        amount: settleModal.amount,
+        proof_url: url,
+        settled_by: user?.id,
+        user_acknowledged: false,
+        note: settleModal.note || `Mission: ${settleModal.missionName}`,
+      });
+      if (error) throw error;
+      await createNotification(
+        settleModal.userId,
+        "settlement",
+        "Payment Received",
+        `₹${settleModal.amount.toLocaleString()} settled for mission "${settleModal.missionName}".${settleModal.note ? " Note: " + settleModal.note : ""}`,
+        settleModal.missionId || undefined
+      );
+      toast.success("Settled successfully!");
+      setSettleModal(s => ({ ...s, open: false }));
+      setSettlePreviewUrl(""); setSettleTempFile(null);
+      fetchData();
+    } catch (err: any) { toast.error(err.message); }
+    finally { setSettleLoading(false); }
+  };
+
   if (role !== "admin") {
     return <div className="text-center py-10 text-[10px] font-black text-destructive uppercase">Access Denied</div>;
   }
@@ -493,6 +573,7 @@ export default function AdminJournalLogbook() {
     const isExpanded = expandedMissions.has(mission.id);
     const isActive = mission.status === "active" || mission.status === "pending";
     const isEditing = editingMissionId === mission.id;
+    const sd = getMissionSettlementData(mission.id);
 
     return (
       <div key={mission.id} className="bg-white rounded-[1.8rem] border border-gray-100 overflow-hidden animate-fade-in mb-3 shadow-sm">
@@ -578,12 +659,26 @@ export default function AdminJournalLogbook() {
                 <div className="text-right flex-shrink-0">
                   <p className="text-xs font-black text-gray-900">₹{missionTotal.toLocaleString()}</p>
                   {cashTotal > 0 && <p className="text-[9px] font-bold text-emerald-600">+₹{cashTotal.toLocaleString()} cash</p>}
-                  <div className="flex gap-1.5 mt-1 justify-end">
+                  <div className="flex gap-1.5 mt-1 justify-end flex-wrap">
                     <span className="text-[7px] bg-gray-100 px-2 py-0.5 rounded-full font-black text-gray-500">{missionExpenses.length} entries</span>
                     <span className={`text-[7px] px-2 py-0.5 rounded-full font-black uppercase ${STATUS_BADGES[mission.status] || "bg-gray-100 text-gray-500"}`}>
                       {mission.status}
                     </span>
                   </div>
+                  {/* Settlement Status Badge */}
+                  {sd.hasExpenses && (
+                    <div className="mt-1.5 flex justify-end">
+                      {sd.isSettled ? (
+                        <span className="flex items-center gap-1 text-[7px] font-black px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100">
+                          <BadgeCheck className="w-2.5 h-2.5" /> SETTLED
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 text-[7px] font-black px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100">
+                          <CircleDollarSign className="w-2.5 h-2.5" /> ₹{sd.pending.toLocaleString()} DUE
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </button>
@@ -591,7 +686,7 @@ export default function AdminJournalLogbook() {
 
           {/* Admin Action Buttons (visible when not editing) */}
           {!isEditing && (
-            <div className="flex gap-2 mt-2 pl-6">
+            <div className="flex gap-2 mt-2 pl-6 flex-wrap">
               <button
                 onClick={(e) => { e.stopPropagation(); startEditMission(mission); }}
                 className="flex items-center gap-1 bg-blue-50 text-blue-600 px-2.5 py-1 rounded-lg text-[7px] font-black uppercase hover:bg-blue-100 transition-colors"
@@ -604,6 +699,14 @@ export default function AdminJournalLogbook() {
               >
                 <Trash2 className="w-2.5 h-2.5" /> Delete
               </button>
+              {sd.hasExpenses && !sd.isSettled && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); openSettleModal(mission); }}
+                  className="flex items-center gap-1 bg-emerald-500 text-white px-2.5 py-1 rounded-lg text-[7px] font-black uppercase hover:bg-emerald-600 transition-colors shadow-sm"
+                >
+                  <Wallet className="w-2.5 h-2.5" /> Settle
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -797,6 +900,104 @@ export default function AdminJournalLogbook() {
       )}
 
       <ImagePreviewModal imageUrl={previewImage} onClose={() => setPreviewImage(null)} />
+
+      {/* Settlement Modal */}
+      {settleModal.open && (
+        <div className="fixed inset-0 z-[1000] flex items-end justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-white w-full max-w-sm rounded-t-[2.5rem] p-5 shadow-2xl space-y-3 pb-10">
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-1" />
+
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-[8px] font-black uppercase text-gray-400 tracking-widest">Mission Settlement</p>
+                <p className="text-[11px] font-black text-gray-900 uppercase mt-0.5 truncate max-w-[220px]">{settleModal.missionName}</p>
+              </div>
+              <button
+                onClick={() => { setSettleModal(s => ({ ...s, open: false })); setSettlePreviewUrl(""); setSettleTempFile(null); }}
+                className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 font-black text-sm"
+              >×</button>
+            </div>
+
+            {/* Full / Partial toggle */}
+            <div className="flex gap-1.5 p-1 bg-gray-100 rounded-xl">
+              <button
+                onClick={() => {
+                  const sd2 = getMissionSettlementData(settleModal.missionId!);
+                  setSettleModal(s => ({ ...s, amountType: "full", amount: sd2.pending > 0 ? sd2.pending : 0 }));
+                }}
+                className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${settleModal.amountType === "full" ? "bg-blue-600 text-white shadow-sm" : "text-gray-400"}`}
+              >Full</button>
+              <button
+                onClick={() => setSettleModal(s => ({ ...s, amountType: "partial", amount: 0 }))}
+                className={`flex-1 py-2 rounded-lg text-[8px] font-black uppercase transition-all ${settleModal.amountType === "partial" ? "bg-blue-600 text-white shadow-sm" : "text-gray-400"}`}
+              >Partial</button>
+            </div>
+
+            {/* Amount */}
+            <div className="bg-gray-50 rounded-2xl px-4 py-3 flex items-center gap-2">
+              <span className="text-gray-400 font-black text-lg">₹</span>
+              <input
+                type="number"
+                placeholder="0"
+                value={settleModal.amount || ""}
+                readOnly={settleModal.amountType === "full"}
+                onChange={(e) => setSettleModal(s => ({ ...s, amount: Number(e.target.value) }))}
+                className="flex-1 bg-transparent text-xl font-black outline-none text-gray-900"
+              />
+            </div>
+
+            {/* Note */}
+            <input
+              type="text"
+              placeholder="Note (UPI / Cash / Bank)"
+              value={settleModal.note}
+              onChange={(e) => setSettleModal(s => ({ ...s, note: e.target.value }))}
+              className="w-full px-4 py-3 bg-gray-50 rounded-2xl text-[10px] font-bold outline-none uppercase"
+            />
+
+            {/* Proof upload */}
+            {!settlePreviewUrl ? (
+              <label className="w-full h-20 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 transition-all">
+                <span className="text-2xl mb-1">📎</span>
+                <span className="text-[8px] font-black uppercase text-gray-400">Upload Proof</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) { setSettleTempFile(f); setSettlePreviewUrl(URL.createObjectURL(f)); }
+                  }}
+                />
+              </label>
+            ) : (
+              <div className="relative w-full h-24 rounded-2xl overflow-hidden border border-gray-100">
+                <img src={settlePreviewUrl} className="w-full h-full object-cover" />
+                <button
+                  onClick={() => { setSettlePreviewUrl(""); setSettleTempFile(null); }}
+                  className="absolute top-1 right-1 w-6 h-6 bg-black/60 text-white rounded-full flex items-center justify-center text-xs font-black"
+                >×</button>
+              </div>
+            )}
+
+            {/* Submit */}
+            <button
+              onClick={handleSettle}
+              disabled={settleLoading || !settleTempFile || !settleModal.amount}
+              className="w-full py-3.5 rounded-2xl text-[9px] font-black uppercase text-white transition-all active:scale-95 disabled:opacity-40 disabled:pointer-events-none"
+              style={{ background: "linear-gradient(135deg,#2563eb,#1d4ed8)" }}
+            >
+              {settleLoading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing...
+                </span>
+              ) : (
+                `Confirm Settlement ₹${(settleModal.amount || 0).toLocaleString()}`
+              )}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Expense Delete Confirmation */}
       <AlertDialog open={!!deleteExpenseId} onOpenChange={(open) => !open && setDeleteExpenseId(null)}>
