@@ -20,7 +20,7 @@ interface ExpenseCard {
   subRows: SubRow[];
 }
 
-const CATEGORIES = ["travel", "meal", "luggage", "hotel", "cash", "other"] as const;
+const ALL_CATEGORIES = ["travel", "meal", "luggage", "hotel", "cash", "other"] as const;
 
 const CATEGORY_COLORS: Record<string, string> = {
   travel: "bg-category-travel text-primary-foreground",
@@ -50,13 +50,19 @@ export default function ExpenseForm({
   categoryLimits,
   todayExpenses,
   onSaved,
+  isAdmin = false,
 }: {
   userId: string;
   missionId: string;
   categoryLimits: Record<string, number>;
   todayExpenses: any[];
   onSaved: () => void;
+  isAdmin?: boolean;
 }) {
+  const CATEGORIES = isAdmin
+    ? ALL_CATEGORIES
+    : (ALL_CATEGORIES.filter((c) => c !== "cash") as readonly string[]);
+
   const [cards, setCards] = useState<ExpenseCard[]>([
     { id: generateSafeId(), category: "", subRows: [createSubRow()] },
   ]);
