@@ -413,7 +413,7 @@ export default function UserDashboard() {
             Loading journal...
           </div>
         }>
-          <JourneyLogbook userId={user?.id || ""} refreshKey={refreshKey} />
+          <JourneyLogbook userId={user?.id || ""} refreshKey={refreshKey} settlements={settlements} userName={profile?.name || user?.email || "User"} />
         </Suspense>
       </div>
 
